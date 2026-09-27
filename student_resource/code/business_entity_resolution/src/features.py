@@ -26,10 +26,16 @@ from src.candidate_generation import (
     extract_name_core,
     extract_address_numbers,
     extract_tokens,
+    EntityRecord,
+    build_entity_record,
 )
 
 
-def _precompute_entity_record(df: pd.DataFrame, needed_ids: set = None) -> dict:
+def _precompute_entity_record(
+    df: pd.DataFrame,
+    needed_ids: set = None,
+    s1_records_map: dict = None,
+) -> dict:
     """Precompute tokens and cores once per entity to maximize extraction speed."""
     record_map = {}
     if needed_ids is not None and len(needed_ids) == 0:
@@ -40,26 +46,20 @@ def _precompute_entity_record(df: pd.DataFrame, needed_ids: set = None) -> dict:
         if needed_ids is not None and eid not in needed_ids:
             continue
 
-        name = str(row.business_name_normalized).strip() if not pd.isna(row.business_name_normalized) else ""
-        addr = str(row.business_address_normalized).strip() if not pd.isna(row.business_address_normalized) else ""
-        ctry = str(row.country_normalized).strip().lower() if not pd.isna(row.country_normalized) else ""
-        
-        core = extract_name_core(name) if name else ""
-        ntoks = set(extract_tokens(name, GENERIC_NAME_WORDS, min_len=3)) if name else set()
-        atoks = set(extract_tokens(addr, GENERIC_ADDRESS_WORDS, min_len=4)) if addr else set()
-        nums = set(extract_address_numbers(addr)) if addr else set()
-        pfx4 = name[:4] if len(name) >= 4 else name
+        rec = s1_records_map.get(eid) if s1_records_map else None
+        if rec is None:
+            rec = build_entity_record(row)
 
         record_map[eid] = {
-            "name": name,
-            "core": core,
-            "addr": addr,
-            "country": ctry,
-            "ntoks": ntoks,
-            "atoks": atoks,
-            "nums": nums,
-            "pfx4": pfx4,
-            "name_len": len(name),
+            "name": rec.name,
+            "core": rec.core,
+            "addr": rec.addr,
+            "country": rec.country,
+            "ntoks": set(rec.ntoks),
+            "atoks": set(rec.atoks),
+            "nums": set(rec.nums),
+            "pfx4": rec.name_prefix_4,
+            "name_len": len(rec.name),
         }
     return record_map
 
@@ -69,6 +69,7 @@ def create_matching_features(
     source1: pd.DataFrame,
     source2: pd.DataFrame,
     source3: pd.DataFrame,
+    s1_records_map: dict = None,
 ) -> pd.DataFrame:
     """
     Generate rich pairwise matching features for candidate pairs.
@@ -78,9 +79,10 @@ def create_matching_features(
     cand_needed = set(candidates["candidate_entity_id"])
 
     # 1. Precompute record representations for fast lookup
-    s1_map = _precompute_entity_record(source1, needed_ids=s1_needed)
-    s2_map = _precompute_entity_record(source2, needed_ids=cand_needed)
-    s3_map = _precompute_entity_record(source3, needed_ids=cand_needed)
+    s1_map = _precompute_entity_record(source1, needed_ids=s1_needed, s1_records_map=s1_records_map)
+    s2_map = _precompute_entity_record(source2, needed_ids=cand_needed, s1_records_map=s1_records_map)
+    s3_map = _precompute_entity_record(source3, needed_ids=cand_needed, s1_records_map=s1_records_map)
+
 
     has_score_col = "score" in candidates.columns
     has_source_col = "candidate_source" in candidates.columns
