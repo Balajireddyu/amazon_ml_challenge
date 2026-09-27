@@ -123,7 +123,7 @@ def create_matching_features(
         # Name token overlap & Jaccard
         ntoks1, ntoks2 = r1["ntoks"], r2["ntoks"]
         n_inter = len(ntoks1 & ntoks2)
-        n_union = len(ntoks1 | ntoks2)
+        n_union = len(ntoks1) + len(ntoks2) - n_inter
         name_tok_jaccard = (n_inter / n_union) if n_union > 0 else 0.0
         name_tok_overlap_count = float(n_inter)
 
@@ -144,7 +144,7 @@ def create_matching_features(
         # Address token overlap & Jaccard
         atoks1, atoks2 = r1["atoks"], r2["atoks"]
         a_inter = len(atoks1 & atoks2)
-        a_union = len(atoks1 | atoks2)
+        a_union = len(atoks1) + len(atoks2) - a_inter
         addr_tok_jaccard = (a_inter / a_union) if a_union > 0 else 0.0
         addr_tok_overlap_count = float(a_inter)
 
@@ -153,7 +153,7 @@ def create_matching_features(
         # ====================================================
         nums1, nums2 = r1["nums"], r2["nums"]
         num_inter = len(nums1 & nums2)
-        num_union = len(nums1 | nums2)
+        num_union = len(nums1) + len(nums2) - num_inter
         num_jaccard = (num_inter / num_union) if num_union > 0 else 0.0
         num_overlap_count = float(num_inter)
         num_has_match = 1.0 if num_inter > 0 else 0.0
