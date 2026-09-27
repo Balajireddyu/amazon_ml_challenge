@@ -172,8 +172,8 @@ class InvertedCandidateIndex:
                     self._append_prunable(self.name_bigram_idx, (country, bg), cand_idx, self.max_bucket_size)
 
                 first_w = ntoks[0] if ntoks else ""
-                name_prefix_4 = name[:4] if len(name) >= 4 else name
-                name_prefix_2 = name[:2] if len(name) >= 2 else name
+                name_prefix_4 = name[:4]
+                name_prefix_2 = name[:2]
             else:
                 first_w = ""
                 name_prefix_4 = ""
