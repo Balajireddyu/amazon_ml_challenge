@@ -117,6 +117,20 @@ class InvertedCandidateIndex:
         self.num_only_idx     = defaultdict(list)  # (country, num) — addr-number-only
         self.prefix2_name_idx = defaultdict(list)  # (country, name_prefix2, name_tok)
 
+    @staticmethod
+    def _append_prunable(index_dict: dict, key: tuple, cand_idx: int, limit: int):
+        """
+        Inline bucket pruning helper for defaultdict(list) buckets.
+        If a bucket exceeds `limit` during index build, it is set to None sentinel.
+        Subsequent insertions for disabled keys (None) are ignored immediately,
+        preventing memory accumulation for high-frequency generic tokens.
+        """
+        val = index_dict[key]
+        if val is not None:
+            val.append(cand_idx)
+            if len(val) > limit:
+                index_dict[key] = None
+
     def add_source(self, df: pd.DataFrame, source_label: str):
         """Index all records from a candidate dataframe. May be called multiple times."""
         assert not self._finalized, "Cannot add_source after finalize()."
@@ -152,10 +166,10 @@ class InvertedCandidateIndex:
 
                 ntoks = extract_tokens(name, GENERIC_NAME_WORDS, min_len=3)
                 for tok in ntoks:
-                    self.name_token_idx[(country, tok)].append(cand_idx)
+                    self._append_prunable(self.name_token_idx, (country, tok), cand_idx, self.max_bucket_size)
 
                 for bg in extract_name_bigrams(ntoks):
-                    self.name_bigram_idx[(country, bg)].append(cand_idx)
+                    self._append_prunable(self.name_bigram_idx, (country, bg), cand_idx, self.max_bucket_size)
 
                 first_w = ntoks[0] if ntoks else ""
                 name_prefix_4 = name[:4] if len(name) >= 4 else name
@@ -171,13 +185,13 @@ class InvertedCandidateIndex:
                 nums = extract_address_numbers(addr)
                 atoks = extract_tokens(addr, GENERIC_ADDRESS_WORDS, min_len=4)
                 for tok in atoks:
-                    self.addr_token_idx[(country, tok)].append(cand_idx)
+                    self._append_prunable(self.addr_token_idx, (country, tok), cand_idx, self.max_bucket_size)
 
                 first_a = atoks[0] if atoks else ""
 
                 for num in nums:
                     # Addr-number-only (catches same-address matches with different names)
-                    self.num_only_idx[(country, num)].append(cand_idx)
+                    self._append_prunable(self.num_only_idx, (country, num), cand_idx, self.max_bucket_size // 5)
 
                     # Compound: num + first name token
                     if first_w:
@@ -194,29 +208,30 @@ class InvertedCandidateIndex:
                 # 2-char name prefix + each addr token (light cross signal)
                 if name_prefix_2:
                     for tok in atoks:
-                        self.prefix2_name_idx[(country, name_prefix_2, tok)].append(cand_idx)
+                        self._append_prunable(self.prefix2_name_idx, (country, name_prefix_2, tok), cand_idx, self.max_bucket_size)
 
     def finalize(self):
         """
         Prune oversized token buckets (high-frequency generic terms) and
         freeze the index. Must be called once after all add_source() calls.
+        Safe and idempotent.
         """
         mb = self.max_bucket_size
 
         self.name_token_idx = {
-            k: v for k, v in self.name_token_idx.items() if len(v) <= mb
+            k: v for k, v in self.name_token_idx.items() if v is not None and len(v) <= mb
         }
         self.addr_token_idx = {
-            k: v for k, v in self.addr_token_idx.items() if len(v) <= mb
+            k: v for k, v in self.addr_token_idx.items() if v is not None and len(v) <= mb
         }
         self.name_bigram_idx = {
-            k: v for k, v in self.name_bigram_idx.items() if len(v) <= mb
+            k: v for k, v in self.name_bigram_idx.items() if v is not None and len(v) <= mb
         }
         self.num_only_idx = {
-            k: v for k, v in self.num_only_idx.items() if len(v) <= mb // 5
+            k: v for k, v in self.num_only_idx.items() if v is not None and len(v) <= mb // 5
         }
         self.prefix2_name_idx = {
-            k: v for k, v in self.prefix2_name_idx.items() if len(v) <= mb
+            k: v for k, v in self.prefix2_name_idx.items() if v is not None and len(v) <= mb
         }
         self._finalized = True
 
