@@ -1,10 +1,12 @@
+import os
 import pandas as pd
 
 from src.data_loader import load_training_data
 from src.preprocessing import preprocess_all_sources
 from src.candidate_generation import generate_fuzzy_candidates
 from src.features import create_matching_features
-from src.model import create_labels, train_matching_model
+from src.model import create_labels, train_matching_model, FEATURE_COLUMNS
+from src.matching import predict_matches, create_submission_dataframe
 
 
 # ============================================================
@@ -114,7 +116,7 @@ print(training_data["label"].value_counts())
 # 7. TRAIN FINAL MODEL
 # ============================================================
 
-print("\nTraining final LightGBM model...")
+print("\nTraining final model...")
 
 model = train_matching_model(
     training_data
@@ -127,24 +129,7 @@ print("Final model training completed!")
 # 8. FEATURE COLUMNS
 # ============================================================
 
-feature_columns = [
-    "name_similarity",
-    "name_partial_similarity",
-    "name_token_sort_similarity",
-    "name_token_set_similarity",
-
-    "address_similarity",
-    "address_partial_similarity",
-    "address_token_sort_similarity",
-    "address_token_set_similarity",
-
-    "exact_name",
-    "exact_address",
-    "country_match",
-
-    "address_number_overlap",
-    "combined_similarity"
-]
+feature_columns = FEATURE_COLUMNS
 
 
 # ============================================================
@@ -163,60 +148,88 @@ training_data["probability"] = probabilities
 
 
 # ============================================================
-# 10. APPLY FINAL THRESHOLD
+# 10. APPLY FINAL THRESHOLD & PREDICT MATCHES
 # ============================================================
 
 threshold = 0.50
 
-final_matches = training_data[
-    training_data["probability"] >= threshold
-].copy()
-
-
-# ============================================================
-# 11. CREATE FINAL SUBMISSION
-# ============================================================
-
-submission = final_matches[
-    [
-        "source1_entity_id",
-        "candidate_entity_id",
-        "probability"
-    ]
-].copy()
-
-submission = submission.sort_values(
-    [
-        "source1_entity_id",
-        "probability"
-    ],
-    ascending=[
-        True,
-        False
-    ]
+final_matches = predict_matches(
+    training_data,
+    model,
+    threshold=threshold
 )
 
 
 # ============================================================
-# 12. SAVE OUTPUT
+# 11. CREATE SUBMISSION DATAFRAME & VALIDATION ASSERTIONS
 # ============================================================
 
-output_file = "final_submission.csv"
+all_s1_ids = list(source1["entity_id"])
 
-submission.to_csv(
-    output_file,
+submission_df = create_submission_dataframe(
+    final_matches,
+    all_s1_ids
+)
+
+# --- VALIDATION ASSERTIONS ---
+# A. S1 row count: exactly one row per S1 entity
+assert len(submission_df) == len(source1), (
+    f"Submission row count {len(submission_df)} does not match source1 count {len(source1)}"
+)
+
+# B. S1 ID set identity
+assert set(submission_df["source1_entity_id"]) == set(source1["entity_id"]), (
+    "Submission S1 IDs do not match source1 entity IDs exactly"
+)
+
+# C. No nulls in required columns
+assert not submission_df[["source1_entity_id", "matched_entity_ids"]].isnull().values.any(), (
+    "Submission contains null/NaN values"
+)
+
+# D. Predicted pair subset of candidate pairs
+pred_pairs = set(zip(final_matches["source1_entity_id"], final_matches["candidate_entity_id"]))
+cand_pairs = set(zip(candidates["source1_entity_id"], candidates["candidate_entity_id"]))
+
+assert pred_pairs.issubset(cand_pairs), (
+    "Predicted match pairs exist that are not present in candidate_pairs"
+)
+
+
+# ============================================================
+# 12. SAVE OUTPUTS TO output/ DIRECTORY
+# ============================================================
+
+output_dir = "output"
+os.makedirs(output_dir, exist_ok=True)
+
+# Save candidate pairs: output/candidate_pairs.tsv
+cand_pairs_file = os.path.join(output_dir, "candidate_pairs.tsv")
+candidates[["source1_entity_id", "candidate_entity_id"]].to_csv(
+    cand_pairs_file,
+    sep="\t",
+    index=False
+)
+
+# Save matching results: output/matching_results.tsv
+matching_results_file = os.path.join(output_dir, "matching_results.tsv")
+submission_df.to_csv(
+    matching_results_file,
+    sep="\t",
     index=False
 )
 
 print("\n==========================================")
-print("FINAL SUBMISSION CREATED")
+print("FINAL SUBMISSION CREATED SUCCESSFULLY")
 print("==========================================")
 
-print("Number of final matches:")
-print(len(submission))
+print(f"Total S1 entities processed: {len(submission_df):,}")
+print(f"Total candidate pairs: {len(candidates):,}")
+print(f"Total predicted match pairs: {len(pred_pairs):,}")
 
-print("\nOutput file:")
-print(output_file)
+print(f"\nOutputs written:")
+print(f"  - {cand_pairs_file}")
+print(f"  - {matching_results_file}")
 
-print("\nFirst 20 final matches:")
-print(submission.head(20))
+print("\nFirst 10 rows of matching_results.tsv:")
+print(submission_df.head(10).to_string(index=False))
