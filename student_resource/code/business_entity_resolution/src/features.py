@@ -13,6 +13,7 @@ Features computed:
 
 import re
 import pandas as pd
+import numpy as np
 from rapidfuzz.fuzz import (
     ratio,
     partial_ratio,
@@ -29,6 +30,36 @@ from src.candidate_generation import (
     EntityRecord,
     build_entity_record,
 )
+
+FEATURE_COLUMNS = [
+    "name_ratio",
+    "name_partial_ratio",
+    "name_token_sort_ratio",
+    "name_token_set_ratio",
+    "name_exact_match",
+    "name_core_ratio",
+    "name_core_token_set_ratio",
+    "name_core_exact_match",
+    "name_token_jaccard",
+    "name_token_overlap_count",
+    "name_len_diff",
+    "name_prefix4_match",
+    "address_ratio",
+    "address_partial_ratio",
+    "address_token_sort_ratio",
+    "address_token_set_ratio",
+    "address_exact_match",
+    "address_token_jaccard",
+    "address_token_overlap_count",
+    "address_num_exact_match",
+    "address_num_jaccard",
+    "address_num_overlap_count",
+    "address_num_has_match",
+    "country_match",
+    "joint_similarity",
+    "candidate_score",
+    "source_is_s2",
+]
 
 
 def _precompute_entity_record(
@@ -83,17 +114,32 @@ def create_matching_features(
     s2_map = _precompute_entity_record(source2, needed_ids=cand_needed, s1_records_map=s1_records_map)
     s3_map = _precompute_entity_record(source3, needed_ids=cand_needed, s1_records_map=s1_records_map)
 
+    n_pairs = len(candidates)
+    if n_pairs == 0:
+        cols = ["source1_entity_id", "candidate_entity_id", "candidate_source"] + list(FEATURE_COLUMNS)
+        return pd.DataFrame(columns=cols)
 
     has_score_col = "score" in candidates.columns
     has_source_col = "candidate_source" in candidates.columns
 
-    feature_rows = []
+    s1_ids = candidates["source1_entity_id"].to_numpy()
+    cand_ids = candidates["candidate_entity_id"].to_numpy()
+    cand_srcs = candidates["candidate_source"].to_numpy() if has_source_col else None
+    scores = candidates["score"].to_numpy() if has_score_col else None
 
-    for row in candidates.itertuples(index=False):
-        s1_id = row.source1_entity_id
-        c_id = row.candidate_entity_id
-        c_src = row.candidate_source if has_source_col else ("S2" if c_id.startswith("S2-") else "S3")
-        gen_score = float(row.score) if has_score_col else 0.0
+    # Preallocate 2D NumPy float matrix for the 27 numerical features
+    X_num = np.empty((n_pairs, 27), dtype=np.float64)
+
+    out_s1_ids = []
+    out_cand_ids = []
+    out_cand_srcs = []
+    row_count = 0
+
+    for i in range(n_pairs):
+        s1_id = s1_ids[i]
+        c_id = cand_ids[i]
+        c_src = cand_srcs[i] if has_source_col else ("S2" if str(c_id).startswith("S2-") else "S3")
+        gen_score = float(scores[i]) if has_score_col else 0.0
 
         r1 = s1_map.get(s1_id)
         r2 = s2_map.get(c_id) if c_src == "S2" else s3_map.get(c_id)
@@ -210,11 +256,7 @@ def create_matching_features(
         joint_sim = 0.5 * name_tset + 0.5 * addr_tset
         source_is_s2 = 1.0 if c_src == "S2" else 0.0
 
-        feature_rows.append((
-            s1_id,
-            c_id,
-            c_src,
-            # Name
+        X_num[row_count, :] = (
             name_rat,
             name_part,
             name_tsort,
@@ -227,7 +269,6 @@ def create_matching_features(
             name_tok_overlap_count,
             name_len_diff,
             name_prefix4_match,
-            # Address
             addr_rat,
             addr_part,
             addr_tsort,
@@ -235,53 +276,28 @@ def create_matching_features(
             addr_exact,
             addr_tok_jaccard,
             addr_tok_overlap_count,
-            # Address numbers
             num_exact_match,
             num_jaccard,
             num_overlap_count,
             num_has_match,
-            # Country & Meta
             country_match,
             joint_sim,
             gen_score,
             source_is_s2,
-        ))
+        )
 
-    columns = [
-        "source1_entity_id",
-        "candidate_entity_id",
-        "candidate_source",
-        # Name
-        "name_ratio",
-        "name_partial_ratio",
-        "name_token_sort_ratio",
-        "name_token_set_ratio",
-        "name_exact_match",
-        "name_core_ratio",
-        "name_core_token_set_ratio",
-        "name_core_exact_match",
-        "name_token_jaccard",
-        "name_token_overlap_count",
-        "name_len_diff",
-        "name_prefix4_match",
-        # Address
-        "address_ratio",
-        "address_partial_ratio",
-        "address_token_sort_ratio",
-        "address_token_set_ratio",
-        "address_exact_match",
-        "address_token_jaccard",
-        "address_token_overlap_count",
-        # Numbers
-        "address_num_exact_match",
-        "address_num_jaccard",
-        "address_num_overlap_count",
-        "address_num_has_match",
-        # Country & Meta
-        "country_match",
-        "joint_similarity",
-        "candidate_score",
-        "source_is_s2",
-    ]
+        out_s1_ids.append(s1_id)
+        out_cand_ids.append(c_id)
+        out_cand_srcs.append(c_src)
+        row_count += 1
 
-    return pd.DataFrame(feature_rows, columns=columns)
+    if row_count < n_pairs:
+        X_num = X_num[:row_count, :]
+
+    df_out = pd.DataFrame(X_num, columns=FEATURE_COLUMNS)
+    df_out.insert(0, "candidate_source", out_cand_srcs)
+    df_out.insert(0, "candidate_entity_id", out_cand_ids)
+    df_out.insert(0, "source1_entity_id", out_s1_ids)
+
+    return df_out
+
