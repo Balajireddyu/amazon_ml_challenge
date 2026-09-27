@@ -109,16 +109,46 @@ def create_matching_features(
         # ====================================================
         # 1. NAME SIMILARITY FEATURES
         # ====================================================
-        name_rat = ratio(n1, n2)
-        name_part = partial_ratio(n1, n2)
-        name_tsort = token_sort_ratio(n1, n2)
-        name_tset = token_set_ratio(n1, n2)
-        name_exact = 1.0 if (n1 and n1 == n2) else 0.0
+        if n1 and n2:
+            if n1 == n2:
+                name_rat = 100.0
+                name_part = 100.0
+                name_tsort = 100.0
+                name_tset = 100.0
+                name_exact = 1.0
+            else:
+                name_rat = ratio(n1, n2)
+                name_part = partial_ratio(n1, n2)
+                name_tsort = token_sort_ratio(n1, n2)
+                name_tset = token_set_ratio(n1, n2)
+                name_exact = 0.0
+        elif not n1 and not n2:
+            name_rat = 100.0
+            name_part = 100.0
+            name_tsort = 100.0
+            name_tset = 0.0
+            name_exact = 0.0
+        else:
+            name_rat = 0.0
+            name_part = 0.0
+            name_tsort = 0.0
+            name_tset = 0.0
+            name_exact = 0.0
 
         # Core name features (order & generic-word invariant)
-        core_rat = ratio(core1, core2) if (core1 and core2) else 0.0
-        core_tset = token_set_ratio(core1, core2) if (core1 and core2) else 0.0
-        core_exact = 1.0 if (core1 and core1 == core2) else 0.0
+        if core1 and core2:
+            if core1 == core2:
+                core_rat = 100.0
+                core_tset = 100.0
+                core_exact = 1.0
+            else:
+                core_rat = ratio(core1, core2)
+                core_tset = token_set_ratio(core1, core2)
+                core_exact = 0.0
+        else:
+            core_rat = 0.0
+            core_tset = 0.0
+            core_exact = 0.0
 
         # Name token overlap & Jaccard
         ntoks1, ntoks2 = r1["ntoks"], r2["ntoks"]
@@ -135,11 +165,25 @@ def create_matching_features(
         # ====================================================
         # 2. ADDRESS SIMILARITY FEATURES
         # ====================================================
-        addr_rat = ratio(a1, a2) if (a1 and a2) else 0.0
-        addr_part = partial_ratio(a1, a2) if (a1 and a2) else 0.0
-        addr_tsort = token_sort_ratio(a1, a2) if (a1 and a2) else 0.0
-        addr_tset = token_set_ratio(a1, a2) if (a1 and a2) else 0.0
-        addr_exact = 1.0 if (a1 and a1 == a2) else 0.0
+        if a1 and a2:
+            if a1 == a2:
+                addr_rat = 100.0
+                addr_part = 100.0
+                addr_tsort = 100.0
+                addr_tset = 100.0
+                addr_exact = 1.0
+            else:
+                addr_rat = ratio(a1, a2)
+                addr_part = partial_ratio(a1, a2)
+                addr_tsort = token_sort_ratio(a1, a2)
+                addr_tset = token_set_ratio(a1, a2)
+                addr_exact = 0.0
+        else:
+            addr_rat = 0.0
+            addr_part = 0.0
+            addr_tsort = 0.0
+            addr_tset = 0.0
+            addr_exact = 0.0
 
         # Address token overlap & Jaccard
         atoks1, atoks2 = r1["atoks"], r2["atoks"]
