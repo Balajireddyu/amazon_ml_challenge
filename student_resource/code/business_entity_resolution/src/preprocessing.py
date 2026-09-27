@@ -54,6 +54,30 @@ def normalize_business_name(text):
     return " ".join(words)
 
 
+COUNTRY_ALIASES = {
+    "usa": "us",
+    "u s a": "us",
+    "united states": "us",
+    "united states of america": "us",
+    "uk": "gb",
+    "united kingdom": "gb",
+    "great britain": "gb",
+    "fra": "france",
+    "fr": "france",
+    "ind": "india",
+    "in": "india",
+    "deu": "germany",
+    "de": "germany",
+}
+
+
+def normalize_country(text):
+    text = normalize_text(text)
+    if not text:
+        return ""
+    return COUNTRY_ALIASES.get(text, text)
+
+
 def preprocess_dataframe(df):
     df = df.copy()
 
@@ -66,10 +90,11 @@ def preprocess_dataframe(df):
     )
 
     df["country_normalized"] = (
-        df["country"].apply(normalize_text)
+        df["country"].apply(normalize_country)
     )
 
     return df
+
 
 def preprocess_all_sources(source1, source2, source3):
     source1 = preprocess_dataframe(source1)

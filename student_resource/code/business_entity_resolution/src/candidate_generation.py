@@ -88,6 +88,88 @@ def extract_name_bigrams(ntoks: list) -> list:
 
 
 # ============================================================
+# PRECOMPUTED ENTITY REPRESENTATION
+# ============================================================
+
+class EntityRecord:
+    """Precomputed lightweight entity representation for candidate generation and feature extraction."""
+    __slots__ = (
+        "country",
+        "name",
+        "addr",
+        "core",
+        "ntoks",
+        "atoks",
+        "nums",
+        "bigrams",
+        "first_w",
+        "first_a",
+        "name_prefix_4",
+        "name_prefix_2",
+    )
+
+    def __init__(self, country: str, name: str, addr: str):
+        self.country = country
+        self.name = name
+        self.addr = addr
+
+        if name:
+            self.core = extract_name_core(name)
+            self.ntoks = extract_tokens(name, GENERIC_NAME_WORDS, min_len=3)
+            self.bigrams = extract_name_bigrams(self.ntoks)
+            self.first_w = self.ntoks[0] if self.ntoks else ""
+            self.name_prefix_4 = name[:4]
+            self.name_prefix_2 = name[:2]
+        else:
+            self.core = ""
+            self.ntoks = []
+            self.bigrams = []
+            self.first_w = ""
+            self.name_prefix_4 = ""
+            self.name_prefix_2 = ""
+
+        if addr:
+            self.nums = extract_address_numbers(addr)
+            self.atoks = extract_tokens(addr, GENERIC_ADDRESS_WORDS, min_len=4)
+            self.first_a = self.atoks[0] if self.atoks else ""
+        else:
+            self.nums = []
+            self.atoks = []
+            self.first_a = ""
+
+
+def build_entity_record(row) -> EntityRecord:
+    """Construct an EntityRecord from a DataFrame row with normalized fields."""
+    country = (
+        str(row.country_normalized).strip().lower()
+        if not pd.isna(row.country_normalized) else ""
+    )
+    name = (
+        str(row.business_name_normalized).strip()
+        if not pd.isna(row.business_name_normalized) else ""
+    )
+    addr = (
+        str(row.business_address_normalized).strip()
+        if not pd.isna(row.business_address_normalized) else ""
+    )
+    return EntityRecord(country, name, addr)
+
+
+def build_entity_records(df: pd.DataFrame, needed_ids: set = None) -> dict:
+    """Precompute EntityRecord objects for rows in a DataFrame."""
+    records = {}
+    if needed_ids is not None and len(needed_ids) == 0:
+        return records
+
+    for row in df.itertuples(index=False):
+        eid = row.entity_id
+        if needed_ids is not None and eid not in needed_ids:
+            continue
+        records[eid] = build_entity_record(row)
+    return records
+
+
+# ============================================================
 # INVERTED INDEX (all defaultdict; pruning via finalize())
 # ============================================================
 
@@ -131,7 +213,7 @@ class InvertedCandidateIndex:
             if len(val) > limit:
                 index_dict[key] = None
 
-    def add_source(self, df: pd.DataFrame, source_label: str):
+    def add_source(self, df: pd.DataFrame, source_label: str, records_map: dict = None):
         """Index all records from a candidate dataframe. May be called multiple times."""
         assert not self._finalized, "Cannot add_source after finalize()."
         offset = len(self.candidate_ids)
@@ -143,37 +225,32 @@ class InvertedCandidateIndex:
             self.candidate_ids.append(row.entity_id)
             self.candidate_sources.append(source_label)
 
-            country = (
-                str(row.country_normalized).strip().lower()
-                if not pd.isna(row.country_normalized) else ""
-            )
-            name = (
-                str(row.business_name_normalized).strip()
-                if not pd.isna(row.business_name_normalized) else ""
-            )
-            addr = (
-                str(row.business_address_normalized).strip()
-                if not pd.isna(row.business_address_normalized) else ""
-            )
+            rec = records_map.get(row.entity_id) if records_map else None
+            if rec is None:
+                rec = build_entity_record(row)
+
+            country = rec.country
+            name = rec.name
+            addr = rec.addr
 
             # ---- Name indexing ----
             if name:
                 self.exact_name_idx[(country, name)].append(cand_idx)
 
-                core = extract_name_core(name)
+                core = rec.core
                 if core and core != name:
                     self.core_name_idx[(country, core)].append(cand_idx)
 
-                ntoks = extract_tokens(name, GENERIC_NAME_WORDS, min_len=3)
+                ntoks = rec.ntoks
                 for tok in ntoks:
                     self._append_prunable(self.name_token_idx, (country, tok), cand_idx, self.max_bucket_size)
 
-                for bg in extract_name_bigrams(ntoks):
+                for bg in rec.bigrams:
                     self._append_prunable(self.name_bigram_idx, (country, bg), cand_idx, self.max_bucket_size)
 
-                first_w = ntoks[0] if ntoks else ""
-                name_prefix_4 = name[:4]
-                name_prefix_2 = name[:2]
+                first_w = rec.first_w
+                name_prefix_4 = rec.name_prefix_4
+                name_prefix_2 = rec.name_prefix_2
             else:
                 first_w = ""
                 name_prefix_4 = ""
@@ -182,12 +259,12 @@ class InvertedCandidateIndex:
 
             # ---- Address indexing ----
             if addr:
-                nums = extract_address_numbers(addr)
-                atoks = extract_tokens(addr, GENERIC_ADDRESS_WORDS, min_len=4)
+                nums = rec.nums
+                atoks = rec.atoks
                 for tok in atoks:
                     self._append_prunable(self.addr_token_idx, (country, tok), cand_idx, self.max_bucket_size)
 
-                first_a = atoks[0] if atoks else ""
+                first_a = rec.first_a
 
                 for num in nums:
                     # Addr-number-only (catches same-address matches with different names)
@@ -262,6 +339,7 @@ def generate_candidates_from_index(
     source1: pd.DataFrame,
     index: InvertedCandidateIndex,
     top_k: int = 20,
+    s1_records_map: dict = None,
 ) -> pd.DataFrame:
     """
     For each S1 record, score all candidate entities reached via index lookups,
@@ -274,29 +352,24 @@ def generate_candidates_from_index(
     for row in source1.itertuples(index=False):
         s1_id = row.entity_id
 
-        country = (
-            str(row.country_normalized).strip().lower()
-            if not pd.isna(row.country_normalized) else ""
-        )
-        name = (
-            str(row.business_name_normalized).strip()
-            if not pd.isna(row.business_name_normalized) else ""
-        )
-        addr = (
-            str(row.business_address_normalized).strip()
-            if not pd.isna(row.business_address_normalized) else ""
-        )
+        rec = s1_records_map.get(s1_id) if s1_records_map else None
+        if rec is None:
+            rec = build_entity_record(row)
 
-        core = extract_name_core(name) if name else ""
-        ntoks = extract_tokens(name, GENERIC_NAME_WORDS, min_len=3) if name else []
-        bigrams = extract_name_bigrams(ntoks)
-        first_w = ntoks[0] if ntoks else ""
-        name_prefix_4 = name[:4] if len(name) >= 4 else name
-        name_prefix_2 = name[:2] if len(name) >= 2 else name
+        country = rec.country
+        name = rec.name
+        addr = rec.addr
 
-        nums = extract_address_numbers(addr) if addr else []
-        atoks = extract_tokens(addr, GENERIC_ADDRESS_WORDS, min_len=4) if addr else []
-        first_a = atoks[0] if atoks else ""
+        core = rec.core
+        ntoks = rec.ntoks
+        bigrams = rec.bigrams
+        first_w = rec.first_w
+        name_prefix_4 = rec.name_prefix_4
+        name_prefix_2 = rec.name_prefix_2
+
+        nums = rec.nums
+        atoks = rec.atoks
+        first_a = rec.first_a
 
         scores: dict = {}
         hit_num = set()
@@ -386,6 +459,7 @@ def generate_fuzzy_candidates(
     source3: pd.DataFrame,
     top_k: int = 20,
     max_bucket_size: int = 500,
+    s1_records_map: dict = None,
 ) -> pd.DataFrame:
     """
     Build index over S2+S3, generate top-K candidates for every S1 entity.
@@ -395,13 +469,17 @@ def generate_fuzzy_candidates(
     source1, source2, source3 : preprocessed DataFrames
     top_k : candidates to return per S1 entity (configurable)
     max_bucket_size : max inverted list size before a token key is pruned
+    s1_records_map : optional dict mapping S1 entity_id -> EntityRecord
     """
+    if s1_records_map is None:
+        s1_records_map = build_entity_records(source1)
+
     index = InvertedCandidateIndex(max_bucket_size=max_bucket_size)
     index.add_source(source2, "S2")
     index.add_source(source3, "S3")
     index.finalize()
 
-    return generate_candidates_from_index(source1, index, top_k=top_k)
+    return generate_candidates_from_index(source1, index, top_k=top_k, s1_records_map=s1_records_map)
 
 
 # Alias for backward compat with original student code
