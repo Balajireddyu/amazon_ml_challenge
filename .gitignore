@@ -1,0 +1,14 @@
+# Python cache
+__pycache__/
+*.pyc
+
+# Local datasets
+student_resource/dataset/train/
+student_resource/dataset/test/*.tsv
+
+# Generated outputs
+output/
+
+# Python environment
+.venv/
+venv/
