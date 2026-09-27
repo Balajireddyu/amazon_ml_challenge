@@ -253,6 +253,11 @@ SCORE_NUM_ONLY     = 12.0
 SCORE_NAME_TOK     = 6.0
 
 
+def _add_scores(scores: dict, keys_list, score: float):
+    for cand_idx in keys_list:
+        scores[cand_idx] = scores.get(cand_idx, 0.0) + score
+
+
 def generate_candidates_from_index(
     source1: pd.DataFrame,
     index: InvertedCandidateIndex,
@@ -297,17 +302,13 @@ def generate_candidates_from_index(
         hit_num = set()
         hit_addr_tok = defaultdict(int)
 
-        def _add(keys_list, score):
-            for cand_idx in keys_list:
-                scores[cand_idx] = scores.get(cand_idx, 0.0) + score
-
         # 1. Exact normalized name
         if name:
-            _add(index.exact_name_idx.get((country, name), ()), SCORE_EXACT_NAME)
+            _add_scores(scores, index.exact_name_idx.get((country, name), ()), SCORE_EXACT_NAME)
 
         # 2. Sorted core name (order-invariant)
         if core:
-            _add(index.core_name_idx.get((country, core), ()), SCORE_CORE_NAME)
+            _add_scores(scores, index.core_name_idx.get((country, core), ()), SCORE_CORE_NAME)
 
         # 3. Compound: address number + first address token (strong address signal)
         if first_a:
@@ -319,21 +320,21 @@ def generate_candidates_from_index(
         # 4. Compound: address number + first name token
         if first_w:
             for num in nums:
-                _add(index.num_name1_idx.get((country, num, first_w), ()), SCORE_NUM_NAME1)
+                _add_scores(scores, index.num_name1_idx.get((country, num, first_w), ()), SCORE_NUM_NAME1)
 
         # 5. Compound: name prefix-4 + address number
         if name_prefix_4:
             for num in nums:
-                _add(index.prefix_num_idx.get((country, name_prefix_4, num), ()), SCORE_PREFIX_NUM)
+                _add_scores(scores, index.prefix_num_idx.get((country, name_prefix_4, num), ()), SCORE_PREFIX_NUM)
 
         # 6. Name bigrams (adjacent token pairs, order-sensitive)
         for bg in bigrams:
-            _add(index.name_bigram_idx.get((country, bg), ()), SCORE_NAME_BIGRAM)
+            _add_scores(scores, index.name_bigram_idx.get((country, bg), ()), SCORE_NAME_BIGRAM)
 
         # 7. Name prefix2 + each address token (cross-field signal)
         if name_prefix_2:
             for tok in atoks:
-                _add(index.prefix2_name_idx.get((country, name_prefix_2, tok), ()), SCORE_PREFIX2_ADDR)
+                _add_scores(scores, index.prefix2_name_idx.get((country, name_prefix_2, tok), ()), SCORE_PREFIX2_ADDR)
 
         # 8. Address number only
         for num in nums:
@@ -349,7 +350,7 @@ def generate_candidates_from_index(
 
         # 10. Individual name tokens (downweighted to prevent generic name blowout)
         for tok in ntoks:
-            _add(index.name_token_idx.get((country, tok), ()), SCORE_NAME_TOK)
+            _add_scores(scores, index.name_token_idx.get((country, tok), ()), SCORE_NAME_TOK)
 
         # 11. Address Synergy Boost: address number + address token(s)
         for cand_idx in hit_num:
